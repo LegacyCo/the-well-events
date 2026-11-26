@@ -1,0 +1,77 @@
+# The Well Los Osos: lives at .github/workflows/sync-the-well-events.yml in
+# LegacyCo/the-well-events, with pco_events_sync.py at that repo's root.
+#
+# No secrets needed. Events come from The Well's public Church Center calendar
+# (the-well-los-osos-401754.churchcenter.com), so only what the church published
+# there reaches the website.
+# Settings -> Pages -> Source: "GitHub Actions"
+
+name: Sync The Well events
+
+on:
+  schedule:
+    - cron: "17 * * * *"   # hourly, off the top of the hour
+  workflow_dispatch:
+
+permissions:
+  actions: write     # for the keepalive step
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      # GitHub turns off scheduled workflows in public repos after 60 days with no
+      # repo activity. Re-enabling through the API restarts that clock, no commits needed.
+      - name: Keep the hourly schedule alive
+        if: github.event_name == 'schedule'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow enable "${{ github.workflow }}" --repo "${{ github.repository }}"
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Pull The Well events from Church Center
+        env:
+          EVENTS_SOURCE: churchcenter
+          CHURCH_CENTER_SUBDOMAIN: the-well-los-osos-401754
+          PCO_TIMEZONE: America/Los_Angeles
+          PCO_CALENDAR_NAME: The Well Los Osos Events
+          SITE_URL: https://www.thewelllososos.com/events
+          # Street addresses only for the church campus. Homes show their name; Church
+          # Center still has the full address for people who register or click through.
+          STREET_ADDRESSES: campus
+          # Backstop for staff-only items, one title per line (any case). None known yet:
+          # ask Brent which titles to hide, even if someone publishes one by mistake.
+          EXCLUDE_TITLES: ""
+        # Past events: the last 12 months (the Past events tab). Upcoming: the next 12.
+        run: >
+          python3 pco_events_sync.py --output-dir public --days-back 365 --days-ahead 365
+          --previous "https://legacyco.github.io/the-well-events/events.json"
+
+      # The Squarespace embeds load these scripts; the preview page shows all of them with live data.
+      - name: Add embeds and preview page
+        run: cp -r embeds preview.html public/
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+      - id: deploy
+        uses: actions/deploy-pages@v4
